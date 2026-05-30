@@ -5,14 +5,17 @@ import asyncio, os
 API_ID = int(os.environ.get('API_ID'))
 API_HASH = os.environ.get('API_HASH')
 SESSION = os.environ.get('SESSION_STRING')
-BOT_USERNAME = 'MeChatBot'  # change to exact username
+BOT_USERNAME = 'MeChat'  # change to exact username
 
 AUTO_MESSAGES = [
     "Hi!",
     "How are you?",
     "asl?",
 ]
-FINAL_MESSAGE = "bye, try InstantTalkBot its better!"
+FINAL_MESSAGE = "Hii Can you suggest some other bots to try besides these?
+
+BuddyInboxBot
+InstantTalkBot"
 
 client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
 
