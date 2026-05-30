@@ -12,10 +12,7 @@ AUTO_MESSAGES = [
     "How are you?",
     "asl?",
 ]
-FINAL_MESSAGE = "Hii Can you suggest some other bots to try besides these?
-
-BuddyInboxBot
-InstantTalkBot"
+FINAL_MESSAGE = "Hii Can you suggest some other bot to try besides InstantTalkBot?"
 
 client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
 
