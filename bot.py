@@ -1,18 +1,32 @@
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-import asyncio, os
+import asyncio, os, threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 API_ID = int(os.environ.get('API_ID'))
 API_HASH = os.environ.get('API_HASH')
 SESSION = os.environ.get('SESSION_STRING')
-BOT_USERNAME = 'MeChat'  # change to exact username
+BOT_USERNAME = 'MeChatBot'
 
 AUTO_MESSAGES = [
     "Hi!",
     "How are you?",
     "asl?",
 ]
-FINAL_MESSAGE = "Hii Can you suggest some other bot to try besides InstantTalkBot?"
+FINAL_MESSAGE = "bye, try InstantTalkBot its better!"
+
+# Simple web server to keep Render happy
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'Bot is running!')
+    def log_message(self, format, *args):
+        pass  # silence logs
+
+def run_server():
+    server = HTTPServer(('0.0.0.0', 10000), Handler)
+    server.serve_forever()
 
 client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
 
@@ -54,6 +68,12 @@ async def handler(event):
         await click_button_by_text(event.message, "End Chat")
 
 async def main():
+    # Start web server in background thread
+    thread = threading.Thread(target=run_server)
+    thread.daemon = True
+    thread.start()
+    print("🌐 Web server started on port 10000")
+
     await client.start()
     print("🤖 Bot started!")
     await client.send_message(BOT_USERNAME, "/start")
