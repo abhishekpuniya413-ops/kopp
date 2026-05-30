@@ -6,14 +6,14 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 API_ID = int(os.environ.get('API_ID'))
 API_HASH = os.environ.get('API_HASH')
 SESSION = os.environ.get('SESSION_STRING')
-BOT_USERNAME = 'MeChatBot'
+BOT_USERNAME = 'MeChat'
 
 AUTO_MESSAGES = [
     "Hi!",
     "How are you?",
-    "asl?",
+    "good,can we be friends?",
 ]
-FINAL_MESSAGE = "bye, try InstantTalkBot its better!"
+FINAL_MESSAGE = "sorry i need to go😭, my un- wtyhan"
 
 # Simple web server to keep Render happy
 class Handler(BaseHTTPRequestHandler):
