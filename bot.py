@@ -3,10 +3,8 @@ import asyncio
 import logging
 import threading
 from flask import Flask, jsonify
-from telethon import TelegramClient, events
-from telethon.tl.functions.messages import SendReactionRequest
-from telethon.tl.types import ReactionEmoji
-from telethon.sessions import StringSession
+from pyrogram import Client, filters
+from pyrogram.types import ReactionTypeEmoji
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -18,89 +16,79 @@ logger = logging.getLogger(__name__)
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
-GROUP = os.environ["GROUP_USERNAME"]  # username e.g. "mygroup" or numeric "-1001234567890"
+GROUP_ID = int(os.environ["GROUP_ID"])  # numeric ID e.g. -1001234567890
 REACTION_EMOJI = os.environ.get("REACTION_EMOJI", "🤝")
 PORT = int(os.environ.get("PORT", 8080))
 
-try:
-    GROUP_ID = int(GROUP)
-except ValueError:
-    GROUP_ID = GROUP
-
-# --- Shared state for health endpoint ---
+# --- Shared state ---
 status = {
     "running": False,
     "logged_in_as": None,
-    "group": None,
+    "group_id": GROUP_ID,
     "reactions_sent": 0,
 }
 
-# --- Flask web server (keeps Render web service alive) ---
-app = Flask(__name__)
+# --- Flask (keeps Render web service alive) ---
+flask_app = Flask(__name__)
 
-@app.route("/")
+@flask_app.route("/")
 def index():
     return jsonify({
         "status": "ok" if status["running"] else "starting",
         "logged_in_as": status["logged_in_as"],
-        "group": status["group"],
+        "group_id": status["group_id"],
         "reactions_sent": status["reactions_sent"],
     })
 
-@app.route("/health")
+@flask_app.route("/health")
 def health():
     return jsonify({"status": "ok"}), 200
 
 def run_flask():
-    app.run(host="0.0.0.0", port=PORT)
+    flask_app.run(host="0.0.0.0", port=PORT)
 
-# --- Telegram userbot ---
-client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+# --- Pyrogram userbot ---
+app = Client(
+    name="userbot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING,
+)
+
+@app.on_message(filters.chat(GROUP_ID) & ~filters.me)
+async def react_handler(client, message):
+    try:
+        await client.send_reaction(
+            chat_id=GROUP_ID,
+            message_id=message.id,
+            emoji=REACTION_EMOJI,
+        )
+        status["reactions_sent"] += 1
+        name = message.from_user.first_name if message.from_user else "unknown"
+        logger.info(
+            f"Reacted {REACTION_EMOJI} to message from {name} "
+            f"(id={message.id}) | total={status['reactions_sent']}"
+        )
+    except Exception as e:
+        logger.warning(f"Could not react to message {message.id}: {e}")
 
 async def main():
-    await client.start()
-    me = await client.get_me()
-    status["logged_in_as"] = f"{me.first_name} (@{me.username})"
-    logger.info(f"Logged in as: {status['logged_in_as']}")
+    async with app:
+        me = await app.get_me()
+        status["logged_in_as"] = f"{me.first_name} (@{me.username})"
+        logger.info(f"Logged in as: {status['logged_in_as']}")
 
-    group_entity = await client.get_entity(GROUP_ID)
-    status["group"] = group_entity.title
-    logger.info(f"Target group: {group_entity.title}")
+        await app.send_message(GROUP_ID, "hi 👋")
+        logger.info("Sent 'hi' to the group")
 
-    await client.send_message(group_entity, "hi 👋")
-    logger.info("Sent 'hi' to the group")
-
-    status["running"] = True
-
-    @client.on(events.NewMessage(chats=group_entity))
-    async def handler(event):
-        if event.message.out:
-            return
-        try:
-            await client(SendReactionRequest(
-                peer=group_entity,
-                msg_id=event.message.id,
-                reaction=[ReactionEmoji(emoticon=REACTION_EMOJI)],
-            ))
-            status["reactions_sent"] += 1
-            sender = await event.get_sender()
-            name = getattr(sender, "first_name", "unknown")
-            logger.info(
-                f"Reacted {REACTION_EMOJI} to message from {name} "
-                f"(id={event.message.id}) | total={status['reactions_sent']}"
-            )
-        except Exception as e:
-            logger.warning(f"Could not react to message {event.message.id}: {e}")
-
-    logger.info("Listening for new messages...")
-    await client.run_until_disconnected()
+        status["running"] = True
+        logger.info("Listening for new messages...")
+        await asyncio.get_event_loop().create_future()  # run forever
 
 if __name__ == "__main__":
-    # Start Flask in a background thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     logger.info(f"Web server started on port {PORT}")
 
-    # Run the Telegram client on the main thread
     asyncio.run(main())
     
