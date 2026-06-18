@@ -2,9 +2,13 @@ import os
 import asyncio
 import logging
 import threading
+
+# Fix for Python 3.14 — must create event loop before pyrogram imports
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
 from flask import Flask, jsonify
 from pyrogram import Client, filters
-from pyrogram.types import ReactionTypeEmoji
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -16,7 +20,7 @@ logger = logging.getLogger(__name__)
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
-GROUP_ID = int(os.environ["GROUP_ID"])  # numeric ID e.g. -1001234567890
+GROUP_ID = int(os.environ["GROUP_ID"])  # e.g. -1001234567890
 REACTION_EMOJI = os.environ.get("REACTION_EMOJI", "🤝")
 PORT = int(os.environ.get("PORT", 8080))
 
@@ -90,5 +94,5 @@ if __name__ == "__main__":
     flask_thread.start()
     logger.info(f"Web server started on port {PORT}")
 
-    asyncio.run(main())
+    loop.run_until_complete(main())
     
