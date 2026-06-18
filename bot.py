@@ -1,82 +1,106 @@
+import os
+import asyncio
+import logging
+import threading
+from flask import Flask, jsonify
 from telethon import TelegramClient, events
+from telethon.tl.functions.messages import SendReactionRequest
+from telethon.tl.types import ReactionEmoji
 from telethon.sessions import StringSession
-import asyncio, os, threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
 
-API_ID = int(os.environ.get('API_ID'))
-API_HASH = os.environ.get('API_HASH')
-SESSION = os.environ.get('SESSION_STRING')
-BOT_USERNAME = 'MeChat'
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
-AUTO_MESSAGES = [
-    "Hi!",
-    "How are you?",
-    "good,can we be friends?",
-]
-FINAL_MESSAGE = "sorry i need to go😭, my un- wtyhan"
+# --- Config ---
+API_ID = int(os.environ["API_ID"])
+API_HASH = os.environ["API_HASH"]
+SESSION_STRING = os.environ["SESSION_STRING"]
+GROUP = os.environ["GROUP_USERNAME"]  # username e.g. "mygroup" or numeric "-1001234567890"
+REACTION_EMOJI = os.environ.get("REACTION_EMOJI", "🤝")
+PORT = int(os.environ.get("PORT", 8080))
 
-# Simple web server to keep Render happy
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b'Bot is running!')
-    def log_message(self, format, *args):
-        pass  # silence logs
+try:
+    GROUP_ID = int(GROUP)
+except ValueError:
+    GROUP_ID = GROUP
 
-def run_server():
-    server = HTTPServer(('0.0.0.0', 10000), Handler)
-    server.serve_forever()
+# --- Shared state for health endpoint ---
+status = {
+    "running": False,
+    "logged_in_as": None,
+    "group": None,
+    "reactions_sent": 0,
+}
 
-client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
+# --- Flask web server (keeps Render web service alive) ---
+app = Flask(__name__)
 
-async def click_button_by_text(message, text):
-    try:
-        for i, row in enumerate(message.reply_markup.rows):
-            for j, button in enumerate(row.buttons):
-                if text.lower() in button.text.lower():
-                    await message.click(i, j)
-                    print(f"✅ Clicked: {button.text}")
-                    return True
-    except Exception as e:
-        print(f"❌ Button error: {e}")
-    return False
+@app.route("/")
+def index():
+    return jsonify({
+        "status": "ok" if status["running"] else "starting",
+        "logged_in_as": status["logged_in_as"],
+        "group": status["group"],
+        "reactions_sent": status["reactions_sent"],
+    })
 
-@client.on(events.NewMessage(chats=BOT_USERNAME))
-async def handler(event):
-    msg = event.message.text or ""
-    print(f"BOT: {msg[:60]}")
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok"}), 200
 
-    if "choose who you want to chat with" in msg.lower():
-        print("🎲 Clicking Random...")
-        await asyncio.sleep(1)
-        await click_button_by_text(event.message, "Random")
+def run_flask():
+    app.run(host="0.0.0.0", port=PORT)
 
-    elif "found partner for you" in msg.lower():
-        print("💬 Sending messages...")
-        for text in AUTO_MESSAGES:
-            await asyncio.sleep(3)
-            await client.send_message(BOT_USERNAME, text)
-        await asyncio.sleep(4)
-        await client.send_message(BOT_USERNAME, FINAL_MESSAGE)
-        await asyncio.sleep(3)
-        await client.send_message(BOT_USERNAME, "End Chat")
-
-    elif "are you sure you want to close" in msg.lower():
-        print("🔴 Ending chat...")
-        await asyncio.sleep(1)
-        await click_button_by_text(event.message, "End Chat")
+# --- Telegram userbot ---
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 async def main():
-    # Start web server in background thread
-    thread = threading.Thread(target=run_server)
-    thread.daemon = True
-    thread.start()
-    print("🌐 Web server started on port 10000")
-
     await client.start()
-    print("🤖 Bot started!")
-    await client.send_message(BOT_USERNAME, "/start")
+    me = await client.get_me()
+    status["logged_in_as"] = f"{me.first_name} (@{me.username})"
+    logger.info(f"Logged in as: {status['logged_in_as']}")
+
+    group_entity = await client.get_entity(GROUP_ID)
+    status["group"] = group_entity.title
+    logger.info(f"Target group: {group_entity.title}")
+
+    await client.send_message(group_entity, "hi 👋")
+    logger.info("Sent 'hi' to the group")
+
+    status["running"] = True
+
+    @client.on(events.NewMessage(chats=group_entity))
+    async def handler(event):
+        if event.message.out:
+            return
+        try:
+            await client(SendReactionRequest(
+                peer=group_entity,
+                msg_id=event.message.id,
+                reaction=[ReactionEmoji(emoticon=REACTION_EMOJI)],
+            ))
+            status["reactions_sent"] += 1
+            sender = await event.get_sender()
+            name = getattr(sender, "first_name", "unknown")
+            logger.info(
+                f"Reacted {REACTION_EMOJI} to message from {name} "
+                f"(id={event.message.id}) | total={status['reactions_sent']}"
+            )
+        except Exception as e:
+            logger.warning(f"Could not react to message {event.message.id}: {e}")
+
+    logger.info("Listening for new messages...")
     await client.run_until_disconnected()
 
-asyncio.run(main())
+if __name__ == "__main__":
+    # Start Flask in a background thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info(f"Web server started on port {PORT}")
+
+    # Run the Telegram client on the main thread
+    asyncio.run(main())
+    
