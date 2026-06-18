@@ -2,16 +2,14 @@ import os
 import asyncio
 import logging
 import threading
-
-# Fix for Python 3.14 — must create event loop before pyrogram imports
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
-from flask import Flask, jsonify
-from pyrogram import Client, filters
+from aiohttp import web
+from telethon import TelegramClient, events
+from telethon.sessions import StringSession
+from telethon.tl.functions.messages import SendReactionRequest
+from telethon.tl.types import ReactionEmoji
 
 logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format="%(asctime)s [%(levelname)s] %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
@@ -28,71 +26,66 @@ PORT = int(os.environ.get("PORT", 8080))
 status = {
     "running": False,
     "logged_in_as": None,
-    "group_id": GROUP_ID,
     "reactions_sent": 0,
 }
 
-# --- Flask (keeps Render web service alive) ---
-flask_app = Flask(__name__)
+# --- aiohttp keep-alive (Render web service) ---
+async def start_web_server():
+    async def handle(request):
+        return web.Response(text=str({
+            "status": "ok" if status["running"] else "starting",
+            "logged_in_as": status["logged_in_as"],
+            "reactions_sent": status["reactions_sent"],
+        }), content_type="application/json")
 
-@flask_app.route("/")
-def index():
-    return jsonify({
-        "status": "ok" if status["running"] else "starting",
-        "logged_in_as": status["logged_in_as"],
-        "group_id": status["group_id"],
-        "reactions_sent": status["reactions_sent"],
-    })
-
-@flask_app.route("/health")
-def health():
-    return jsonify({"status": "ok"}), 200
-
-def run_flask():
-    flask_app.run(host="0.0.0.0", port=PORT)
-
-# --- Pyrogram userbot ---
-app = Client(
-    name="userbot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    session_string=SESSION_STRING,
-)
-
-@app.on_message(filters.chat(GROUP_ID) & ~filters.me)
-async def react_handler(client, message):
-    try:
-        await client.send_reaction(
-            chat_id=GROUP_ID,
-            message_id=message.id,
-            emoji=REACTION_EMOJI,
-        )
-        status["reactions_sent"] += 1
-        name = message.from_user.first_name if message.from_user else "unknown"
-        logger.info(
-            f"Reacted {REACTION_EMOJI} to message from {name} "
-            f"(id={message.id}) | total={status['reactions_sent']}"
-        )
-    except Exception as e:
-        logger.warning(f"Could not react to message {message.id}: {e}")
-
-async def main():
-    async with app:
-        me = await app.get_me()
-        status["logged_in_as"] = f"{me.first_name} (@{me.username})"
-        logger.info(f"Logged in as: {status['logged_in_as']}")
-
-        await app.send_message(GROUP_ID, "hi 👋")
-        logger.info("Sent 'hi' to the group")
-
-        status["running"] = True
-        logger.info("Listening for new messages...")
-        await asyncio.get_event_loop().create_future()  # run forever
-
-if __name__ == "__main__":
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
+    app = web.Application()
+    app.router.add_get("/", handle)
+    app.router.add_get("/health", lambda r: web.Response(text="ok"))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
     logger.info(f"Web server started on port {PORT}")
 
-    loop.run_until_complete(main())
+# --- Main ---
+async def main():
+    await start_web_server()
+
+    client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+    await client.start()
+
+    me = await client.get_me()
+    status["logged_in_as"] = f"{me.first_name} (@{me.username})"
+    logger.info(f"Logged in as: {status['logged_in_as']}")
+
+    await client.send_message(GROUP_ID, "hi 👋")
+    logger.info("Sent 'hi' to the group")
+
+    status["running"] = True
+
+    @client.on(events.NewMessage(chats=GROUP_ID))
+    async def handler(event):
+        if event.message.out:
+            return
+        try:
+            await client(SendReactionRequest(
+                peer=GROUP_ID,
+                msg_id=event.message.id,
+                reaction=[ReactionEmoji(emoticon=REACTION_EMOJI)],
+            ))
+            status["reactions_sent"] += 1
+            sender = await event.get_sender()
+            name = getattr(sender, "first_name", "unknown")
+            logger.info(
+                f"Reacted {REACTION_EMOJI} to message from {name} "
+                f"(id={event.message.id}) | total={status['reactions_sent']}"
+            )
+        except Exception as e:
+            logger.warning(f"Could not react to message {event.message.id}: {e}")
+
+    logger.info("Listening for new messages...")
+    await client.run_until_disconnected()
+
+if __name__ == "__main__":
+    asyncio.run(main())
     
