@@ -93,6 +93,8 @@ async def main():
 
         if not isinstance(sender, User):
             return
+        if sender.bot:
+            return
         if sender.id == my_id:
             return
 
@@ -118,3 +120,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
