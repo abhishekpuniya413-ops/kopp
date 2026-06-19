@@ -86,34 +86,6 @@ async def main():
         except Exception as e:
             logger.warning(f"Could not react to message {event.message.id}: {e}")
 
-    # --- Auto-reply to non-contacts who DM you (once per person) ---
-    @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
-    async def dm_handler(event):
-        sender = await event.get_sender()
-
-        if not isinstance(sender, User):
-            return
-        if sender.bot:
-            return
-        if sender.id == my_id:
-            return
-
-        # Skip contacts
-        if getattr(sender, "contact", False):
-            logger.info(f"DM from contact {sender.first_name} — skipping.")
-            return
-
-        # Skip if already replied before
-        async for _ in client.iter_messages(event.chat_id, from_user=my_id, limit=1):
-            logger.info(f"Already messaged {sender.first_name} before — skipping.")
-            return
-
-        await event.reply(AUTO_REPLY)
-        status["auto_replies_sent"] += 1
-        logger.info(
-            f"Auto-replied to {sender.first_name} (@{sender.username}) "
-            f"| total={status['auto_replies_sent']}"
-        )
 
     logger.info("Listening for messages...")
     await client.run_until_disconnected()
