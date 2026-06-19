@@ -1,12 +1,11 @@
 import os
 import asyncio
 import logging
-import threading
 from aiohttp import web
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import SendReactionRequest
-from telethon.tl.types import ReactionEmoji
+from telethon.tl.types import ReactionEmoji, User
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -20,6 +19,7 @@ API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
 GROUP_ID = int(os.environ["GROUP_ID"])  # e.g. -1001234567890
 REACTION_EMOJI = os.environ.get("REACTION_EMOJI", "🤝")
+AUTO_REPLY = os.environ.get("AUTO_REPLY", "hi, how are you? 👋")
 PORT = int(os.environ.get("PORT", 8080))
 
 # --- Shared state ---
@@ -27,16 +27,13 @@ status = {
     "running": False,
     "logged_in_as": None,
     "reactions_sent": 0,
+    "auto_replies_sent": 0,
 }
 
-# --- aiohttp keep-alive (Render web service) ---
+# --- Web server ---
 async def start_web_server():
     async def handle(request):
-        return web.Response(text=str({
-            "status": "ok" if status["running"] else "starting",
-            "logged_in_as": status["logged_in_as"],
-            "reactions_sent": status["reactions_sent"],
-        }), content_type="application/json")
+        return web.Response(text=str(status), content_type="application/json")
 
     app = web.Application()
     app.router.add_get("/", handle)
@@ -55,6 +52,7 @@ async def main():
     await client.start()
 
     me = await client.get_me()
+    my_id = me.id
     status["logged_in_as"] = f"{me.first_name} (@{me.username})"
     logger.info(f"Logged in as: {status['logged_in_as']}")
 
@@ -63,8 +61,9 @@ async def main():
 
     status["running"] = True
 
+    # --- React to every message in the group ---
     @client.on(events.NewMessage(chats=GROUP_ID))
-    async def handler(event):
+    async def group_handler(event):
         if event.message.out:
             return
         try:
@@ -83,7 +82,38 @@ async def main():
         except Exception as e:
             logger.warning(f"Could not react to message {event.message.id}: {e}")
 
-    logger.info("Listening for new messages...")
+    # --- Auto-reply to non-contacts who DM you ---
+    @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
+    async def dm_handler(event):
+        sender = await event.get_sender()
+
+        # Only reply to real users
+        if not isinstance(sender, User):
+            return
+
+        # Skip myself
+        if sender.id == my_id:
+            return
+
+        # Skip contacts (people you already know)
+        if getattr(sender, "contact", False):
+            logger.info(f"DM from contact {sender.first_name} — skipping auto-reply.")
+            return
+
+        # Skip if we've already replied to them before
+        async for msg in client.iter_messages(event.chat_id, from_user=my_id, limit=1):
+            logger.info(f"Already messaged {sender.first_name} before — skipping.")
+            return
+
+        # Send auto-reply
+        await event.reply(AUTO_REPLY)
+        status["auto_replies_sent"] += 1
+        logger.info(
+            f"Auto-replied to new DM from {sender.first_name} (@{sender.username}) "
+            f"| total={status['auto_replies_sent']}"
+        )
+
+    logger.info("Listening for messages...")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
