@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
-GROUP_ID = int(os.environ["GROUP_ID"])  # e.g. -1001234567890
+GROUP_ID = int(os.environ["GROUP_ID"])
 REACTION_EMOJI = os.environ.get("REACTION_EMOJI", "🤝")
 AUTO_REPLY = os.environ.get("AUTO_REPLY", "hi, how are you? 👋")
 PORT = int(os.environ.get("PORT", 8080))
@@ -56,8 +56,12 @@ async def main():
     status["logged_in_as"] = f"{me.first_name} (@{me.username})"
     logger.info(f"Logged in as: {status['logged_in_as']}")
 
-    await client.send_message(GROUP_ID, "hi 👋")
-    logger.info("Sent 'hi' to the group")
+    # Send "hi" on startup — skip silently if slow mode is active
+    try:
+        await client.send_message(GROUP_ID, "hi 👋")
+        logger.info("Sent 'hi' to the group")
+    except Exception as e:
+        logger.warning(f"Could not send greeting (slow mode?): {e}")
 
     status["running"] = True
 
@@ -82,34 +86,30 @@ async def main():
         except Exception as e:
             logger.warning(f"Could not react to message {event.message.id}: {e}")
 
-    # --- Auto-reply to non-contacts who DM you ---
+    # --- Auto-reply to non-contacts who DM you (once per person) ---
     @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
     async def dm_handler(event):
         sender = await event.get_sender()
 
-        # Only reply to real users
         if not isinstance(sender, User):
             return
-
-        # Skip myself
         if sender.id == my_id:
             return
 
-        # Skip contacts (people you already know)
+        # Skip contacts
         if getattr(sender, "contact", False):
-            logger.info(f"DM from contact {sender.first_name} — skipping auto-reply.")
+            logger.info(f"DM from contact {sender.first_name} — skipping.")
             return
 
-        # Skip if we've already replied to them before
-        async for msg in client.iter_messages(event.chat_id, from_user=my_id, limit=1):
+        # Skip if already replied before
+        async for _ in client.iter_messages(event.chat_id, from_user=my_id, limit=1):
             logger.info(f"Already messaged {sender.first_name} before — skipping.")
             return
 
-        # Send auto-reply
         await event.reply(AUTO_REPLY)
         status["auto_replies_sent"] += 1
         logger.info(
-            f"Auto-replied to new DM from {sender.first_name} (@{sender.username}) "
+            f"Auto-replied to {sender.first_name} (@{sender.username}) "
             f"| total={status['auto_replies_sent']}"
         )
 
@@ -118,4 +118,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
